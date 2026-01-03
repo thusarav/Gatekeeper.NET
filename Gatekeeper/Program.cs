@@ -6,7 +6,9 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// --------------------
 // Services
+// --------------------
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
@@ -20,6 +22,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
+
             ValidIssuer = builder.Configuration["Jwt:Issuer"],
             ValidAudience = builder.Configuration["Jwt:Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(
@@ -28,40 +31,48 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
-builder.Services.AddAuthorization();
+// 🔐 Authorization Policies
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("authenticated", policy =>
+        policy.RequireAuthenticatedUser());
 
-// YARP
+    options.AddPolicy("admin-only", policy =>
+        policy.RequireRole("Admin"));
+});
+
+// 🔁 YARP
 builder.Services
     .AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
 var app = builder.Build();
 
+// --------------------
 // Middleware
+// --------------------
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-// DO NOT force HTTPS in dev
-// app.UseHttpsRedirection();
-
-// 🔐 Enable authentication & authorization
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Reverse proxy
-app.MapReverseProxy()
-    .RequireAuthorization(); // 🔒 Protect all YARP routes
+// --------------------
+// AUTH ENDPOINTS
+// --------------------
 
-// 🔐 LOGIN ENDPOINT (JWT ISSUER)
-app.MapPost("/auth/login", (IConfiguration config) =>
+// 🔐 LOGIN — Issue JWT (User default, Admin via ?role=Admin)
+app.MapPost("/auth/login", (string? role, IConfiguration config) =>
 {
+    var userRole = string.IsNullOrEmpty(role) ? "User" : role;
+
     var claims = new[]
     {
         new Claim(ClaimTypes.Name, "demo-user"),
-        new Claim(ClaimTypes.Role, "User")
+        new Claim(ClaimTypes.Role, userRole)
     };
 
     var key = new SymmetricSecurityKey(
@@ -82,45 +93,44 @@ app.MapPost("/auth/login", (IConfiguration config) =>
 
     var jwt = new JwtSecurityTokenHandler().WriteToken(token);
 
-    return Results.Ok(new { token = jwt });
+    return Results.Ok(new
+    {
+        token = jwt,
+        role = userRole
+    });
 });
 
-// 🔍 INSPECT ENDPOINT (DECODE JWT)
+// 🔍 INSPECT — Decode JWT (debug / learning only)
 app.MapPost("/auth/inspect", (HttpContext context) =>
 {
-    try
+    var authHeader = context.Request.Headers.Authorization.ToString();
+
+    if (!authHeader.StartsWith("Bearer "))
     {
-        // Extract token from Authorization header
-        var authHeader = context.Request.Headers.Authorization.ToString();
-        if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Bearer "))
+        return Results.BadRequest(new
         {
-            return Results.BadRequest(new { error = "Missing or invalid Authorization header. Use: Authorization: Bearer YOUR_TOKEN" });
-        }
-
-        var token = authHeader.Substring("Bearer ".Length).Trim();
-        var handler = new JwtSecurityTokenHandler();
-
-        // Decode WITHOUT validation (just to inspect)
-        var jwtToken = handler.ReadJwtToken(token);
-
-        var claims = jwtToken.Claims.ToDictionary(c => c.Type, c => c.Value);
-
-        return Results.Ok(new
-        {
-            message = "✅ JWT decoded successfully",
-            token = token.Substring(0, 20) + "...", // Show first 20 chars
-            issuer = jwtToken.Issuer,
-            audience = string.Join(", ", jwtToken.Audiences),
-            issuedAt = jwtToken.IssuedAt,
-            expiresAt = jwtToken.ValidTo,
-            expiresIn = (jwtToken.ValidTo - DateTime.UtcNow).TotalSeconds + " seconds",
-            claims = claims
+            error = "Missing or invalid Authorization header"
         });
     }
-    catch (Exception ex)
+
+    var token = authHeader["Bearer ".Length..].Trim();
+    var handler = new JwtSecurityTokenHandler();
+    var jwtToken = handler.ReadJwtToken(token);
+
+    return Results.Ok(new
     {
-        return Results.BadRequest(new { error = $"Invalid token: {ex.Message}" });
-    }
+        issuer = jwtToken.Issuer,
+        audience = jwtToken.Audiences,
+        issuedAt = jwtToken.IssuedAt,
+        expiresAt = jwtToken.ValidTo,
+        claims = jwtToken.Claims.Select(c => new { c.Type, c.Value })
+    });
 });
+
+// --------------------
+// YARP — 🔒 PROTECTED
+// --------------------
+app.MapReverseProxy()
+   .RequireAuthorization("authenticated");
 
 app.Run();
