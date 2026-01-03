@@ -52,7 +52,7 @@ Admin – elevated role for administrative service
 
 
 
-## Example Requests
+## 📡 Example Requests
 
 ### Get JWT Token
 http://localhost:5168/auth/login
@@ -69,7 +69,7 @@ Authorization: Bearer <JWT>
 GET http://localhost:5168/admin/dashboard
 Authorization: Bearer <ADMIN_JWT>
 
-## 🛠️ Running the Project Locally
+## Running the Project Locally
 
 ### Prerequisites
 - .NET 8 SDK
