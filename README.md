@@ -52,7 +52,7 @@ Admin – elevated role for administrative service
 
 
 
-## 📡 Example Requests
+## Example Requests
 
 ### Get JWT Token
 http://localhost:5168/auth/login
